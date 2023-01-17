@@ -138,7 +138,3 @@ dmypy.json
 cython_debug/
 
 # End of https://mrkandreev.name/snippets/gitignore-generator/#Python
-
-# Données du projets
-*.json
-data/
