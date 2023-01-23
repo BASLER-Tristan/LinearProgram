@@ -24,6 +24,7 @@
 # Importations
 import json
 import numpy as np
+import os
 
 # ******************************************************************************************************************** #
 # Function definition
@@ -87,7 +88,6 @@ def extract_gain(data):
     for job in jobs:
         gains.append([int(job["name"].replace("Job", "")), job["gain"]])
     gains = [y for x, y in sorted(gains, key=lambda item: item[0])]
-
     return gains
 
 
@@ -155,6 +155,15 @@ def extract_staff_conges(data):
     # print("\nCongés des employés :\n", conges)
     return conges
 
+def dembedding_project(i):
+    return "Job"+str(i+1)
+
+def dembedding_workers(i,data):
+    return data["staff"][i]["name"]
+
+def dembedding_competences(i,data):
+    qualifications = extract_qualifications(data)
+    return qualifications[i]
 
 # *******************************************************************************#
 # Tests
@@ -323,9 +332,67 @@ class Instance:
         self.variables["COST_PROJECT"] = extract_projets_qualifications(data)
         self.variables["CONGES"] = extract_staff_conges(data)
 
+    def load_solution(self, model,Affectation,Done_Project,Begin_Project,z_fo2,z_fo3):
+        self.model = model
+        self.Affectation_solution = Affectation.X
+        self.Done_Project_solution = Done_Project.X
+        self.Begin_Project_solution = Begin_Project.X
+        self.NB_Project_solution = z_fo2.X
+        self.Duration_solution = z_fo3.X
 
-# ******************************************************************************************************************** #
-# Configuration
+    def save_solution(self, path):
+        os.makedirs(path, exist_ok=True)
+        self.model.write(path + "model.json")
+        np.savez("Solution.npz",
+                 Affectation_solution=self.Affectation_solution,
+                 Done_Project_solution=self.Done_Project_solution,
+                 Begin_Project_solution=self.Begin_Project_solution,
+                 NB_Project_solution= self.NB_Project_solution,
+                 Duration_solution = self.Duration_solution)
+
+        def preprocessing_save(data):
+            for worker in data["staff"]:
+                rep = []
+                for x in worker["vacations"]:
+                    rep.append(int(x))
+                worker["vacations"] = rep
+            data["horizon"] = float(data["horizon"])
+            return data
+
+        preprocessing_save(self.data)
+        with open(path + "data.json", "w") as write_file:
+            json.dump(self.data, write_file, indent=4)
+
+    def load_solution_files(self, path):
+        file = open(path + "DATA.json")
+        self.data = json.load(file)
+        if "model.json" in os.listdir(path):
+            file = open(path + "model.json")
+            self.model = json.load(file)
+
+    def print_kpi(self):
+        assert self.Affectation_solution is not None, "This instance doesn't contain solution data"
+        BENEFICES = np.array([self.variables["GAIN"][i] - self.variables["PENALTIES"][i] for i in range(len(self.variables["GAIN"]))])
+        project_description = ""
+        for project in range(len(self.Done_Project_solution)):
+            if np.sum(self.Done_Project_solution[project]) == 1:
+                project_description = project_description + \
+"The project {} is selected in the solution and done during the day {} and beginned during the day {}.".format(
+                    dembedding_project(project),
+                    np.where(self.Done_Project_solution[project] == 1)[0][0]+1,
+                    np.where(self.Begin_Project_solution[project] == 1)[0][0]+1) + "\n"
+            else:
+                project_description = project_description + "The project {} isn't selected in the solution.".format(
+                    dembedding_project(project)) + "\n"
+        gain_text = "The gain is {}.".format(np.sum(self.Done_Project_solution * BENEFICES))
+        Max_project_text = "The maximum of project for a worker is {}.".format(self.NB_Project_solution)
+        Duration_max_text = "The maximum of duration of a project is {}.".format(self.Duration_solution)
+        print(project_description)
+        print(gain_text)
+        print(Max_project_text)
+        print(Duration_max_text)
+    def plot_affectation(self):
+        assert self.Affectation_solution, "This instance doesn't contain solution data"
 
 
 # ******************************************************************************************************************** #
