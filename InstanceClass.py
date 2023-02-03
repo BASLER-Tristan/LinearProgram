@@ -25,7 +25,8 @@
 import json
 import numpy as np
 import os
-
+from datetime import datetime, timedelta, date, time
+import pandas as pd
 # ******************************************************************************************************************** #
 # Function definition
 
@@ -155,15 +156,19 @@ def extract_staff_conges(data):
     # print("\nCongés des employés :\n", conges)
     return conges
 
-def dembedding_project(i):
-    return "Job"+str(i+1)
 
-def dembedding_workers(i,data):
+def dembedding_project(i):
+    return "Job" + str(i + 1)
+
+
+def dembedding_workers(i, data):
     return data["staff"][i]["name"]
 
-def dembedding_competences(i,data):
+
+def dembedding_competences(i, data):
     qualifications = extract_qualifications(data)
     return qualifications[i]
+
 
 # *******************************************************************************#
 # Tests
@@ -280,11 +285,7 @@ def assert_medium_instance(instance):
     ).all(), "Problem with the penalties"
     assert (
         variables["STAFF_QUALIFICATIONS"][0]
-        == np.array(
-            [
-                [0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-            ]
-        )
+        == np.array([[0, 0, 1, 0, 0, 1, 0, 0, 1, 0],])
     ).all(), "Problem with the staff qualification"
     assert (
         variables["COST_PROJECT"][0] == np.array([[0, 0, 4, 0, 0, 0, 0, 0, 4, 0]])
@@ -332,23 +333,46 @@ class Instance:
         self.variables["COST_PROJECT"] = extract_projets_qualifications(data)
         self.variables["CONGES"] = extract_staff_conges(data)
 
-    def load_solution(self, model,Affectation,Done_Project,Begin_Project,z_fo2,z_fo3):
+    def load_solution(
+        self, model, Affectation, Done_Project, Begin_Project, z_fo2, z_fo3
+    ):
         self.model = model
-        self.Affectation_solution = Affectation.X
-        self.Done_Project_solution = Done_Project.X
-        self.Begin_Project_solution = Begin_Project.X
-        self.NB_Project_solution = z_fo2.X
-        self.Duration_solution = z_fo3.X
+        if isinstance(Affectation, np.ndarray):
+            self.Affectation_solution = Affectation
+        else:
+            self.Affectation_solution = Affectation.X
+
+        if isinstance(Done_Project, np.ndarray):
+            self.Done_Project_solution = Done_Project
+        else:
+            self.Done_Project_solution = Done_Project.X
+
+        if isinstance(Begin_Project, np.ndarray):
+            self.Begin_Project_solution = Begin_Project
+        else:
+            self.Begin_Project_solution = Begin_Project.X
+
+        if isinstance(z_fo2, int):
+            self.NB_Project_solution = z_fo2
+        else:
+            self.NB_Project_solution = z_fo2.X
+
+        if isinstance(z_fo3, int):
+            self.Duration_solution = z_fo3
+        else:
+            self.Duration_solution = z_fo3.X
 
     def save_solution(self, path):
         os.makedirs(path, exist_ok=True)
         self.model.write(path + "model.json")
-        np.savez("Solution.npz",
-                 Affectation_solution=self.Affectation_solution,
-                 Done_Project_solution=self.Done_Project_solution,
-                 Begin_Project_solution=self.Begin_Project_solution,
-                 NB_Project_solution= self.NB_Project_solution,
-                 Duration_solution = self.Duration_solution)
+        np.savez(
+            "Solution.npz",
+            Affectation_solution=self.Affectation_solution,
+            Done_Project_solution=self.Done_Project_solution,
+            Begin_Project_solution=self.Begin_Project_solution,
+            NB_Project_solution=self.NB_Project_solution,
+            Duration_solution=self.Duration_solution,
+        )
 
         def preprocessing_save(data):
             for worker in data["staff"]:
@@ -369,31 +393,129 @@ class Instance:
         if "model.json" in os.listdir(path):
             file = open(path + "model.json")
             self.model = json.load(file)
+        if "Solution.npz" in os.listdir(path):
+            file = np.load("Solution.npz")
+            self.Affectation_solution = file["Affectation_solution"]
+            self.Done_Project_solution = file["Done_Project_solution"]
+            self.Begin_Project_solution = file["Begin_Project_solution"]
+            self.NB_Project_solution = file["NB_Project_solution"]
+            self.Duration_solution = file["Duration_solution"]
+
+    def calcul_solution(self):
+        assert (
+            self.Affectation_solution is not None
+        ), "This instance doesn't contain solution data"
+        # Correction of Begin_Project_solution
+        Begin_Project_solution_corrected = np.zeros(
+            np.shape(self.Begin_Project_solution)
+        )
+        for i in range(len(self.Begin_Project_solution)):
+            for j in range(len(self.Begin_Project_solution[0])):
+                if np.sum((np.sum(self.Affectation_solution, axis=0)[i][j])) > 0:
+                    Begin_Project_solution_corrected[j][i] = 1
+        for i in range(len(Begin_Project_solution_corrected)):
+            for j in range(len(Begin_Project_solution_corrected[i])):
+                if (np.sum(Begin_Project_solution_corrected[i][0:j])) > 0:
+                    Begin_Project_solution_corrected[i][j] = 0
+        self.Begin_Project_solution = Begin_Project_solution_corrected
+
+        # Correction of Done_Project_solution
+        Done_Project_solution_corrected = np.zeros(np.shape(self.Done_Project_solution))
+        cumul_work = np.cumsum(np.sum(self.Affectation_solution, axis=0), axis=0)
+        for i in range(len(Done_Project_solution_corrected)):
+            for j in range(len(Done_Project_solution_corrected[0])):
+                if (cumul_work[i][j] >= self.variables["COST_PROJECT"][j]).all():
+                    Done_Project_solution_corrected[j][i] = 1
+
+        for i in range(len(Done_Project_solution_corrected)):
+            for j in range(len(Done_Project_solution_corrected[i])):
+                if (np.sum(Done_Project_solution_corrected[i][0:j])) > 0:
+                    Done_Project_solution_corrected[i][j] = 0
+        self.Done_Project_solution = Done_Project_solution_corrected
 
     def print_kpi(self):
-        assert self.Affectation_solution is not None, "This instance doesn't contain solution data"
-        BENEFICES = np.array([self.variables["GAIN"][i] - self.variables["PENALTIES"][i] for i in range(len(self.variables["GAIN"]))])
+        assert (
+            self.Affectation_solution is not None
+        ), "This instance doesn't contain solution data"
+        BENEFICES = np.array(
+            [
+                self.variables["GAIN"][i] - self.variables["PENALTIES"][i]
+                for i in range(len(self.variables["GAIN"]))
+            ]
+        )
         project_description = ""
         for project in range(len(self.Done_Project_solution)):
             if np.sum(self.Done_Project_solution[project]) == 1:
-                project_description = project_description + \
-"The project {} is selected in the solution and done during the day {} and beginned during the day {}.".format(
-                    dembedding_project(project),
-                    np.where(self.Done_Project_solution[project] == 1)[0][0]+1,
-                    np.where(self.Begin_Project_solution[project] == 1)[0][0]+1) + "\n"
+                project_description = (
+                    project_description
+                    + "The project {} is selected in the solution and done during the day {} and beginned during the day {}.".format(
+                        dembedding_project(project),
+                        np.where(self.Done_Project_solution[project] == 1)[0][0] + 1,
+                        np.where(self.Begin_Project_solution[project] == 1)[0][0] + 1,
+                    )
+                    + "\n"
+                )
             else:
-                project_description = project_description + "The project {} isn't selected in the solution.".format(
-                    dembedding_project(project)) + "\n"
-        gain_text = "The gain is {}.".format(np.sum(self.Done_Project_solution * BENEFICES))
-        Max_project_text = "The maximum of project for a worker is {}.".format(self.NB_Project_solution)
-        Duration_max_text = "The maximum of duration of a project is {}.".format(self.Duration_solution)
+                project_description = (
+                    project_description
+                    + "The project {} isn't selected in the solution.".format(
+                        dembedding_project(project)
+                    )
+                    + "\n"
+                )
+        gain_text = "The gain is {}.".format(
+            np.sum(self.Done_Project_solution * BENEFICES)
+        )
+        Max_project_text = "The maximum of project for a worker is {}.".format(
+            self.NB_Project_solution
+        )
+        Duration_max_text = "The maximum of duration of a project is {}.".format(
+            self.Duration_solution
+        )
         print(project_description)
         print(gain_text)
         print(Max_project_text)
         print(Duration_max_text)
-    def plot_affectation(self):
-        assert self.Affectation_solution, "This instance doesn't contain solution data"
 
+    def plot_affectation(self):
+        assert self.Affectation_solution is not None, "This instance doesn't contain solution data"
+        # Evolution of gain during time
+        import plotly.express as px
+        BENEFICES = np.array(
+            [
+                self.variables["GAIN"][i] - self.variables["PENALTIES"][i]
+                for i in range(len(self.variables["GAIN"]))
+            ]
+        )
+        fig = px.bar(y=np.cumsum(np.sum(self.Done_Project_solution * BENEFICES,axis=0)),
+                     x=[pd.to_datetime('2009-01-01') + timedelta(i) for i in range(len(self.Affectation_solution[0]))],
+                    title="Evolution of the gain during the time")
+        fig.update_layout(showlegend=False)
+        fig.update_xaxes(title="Time")
+        fig.update_yaxes(title="Gain")
+        fig.show()
+
+        # Workers Affectations
+        for i in range(len(self.Affectation_solution)):
+            list_dict = []
+            for j in range(len(self.Affectation_solution[0])):
+                if np.sum(self.Affectation_solution[i][j]) > 0:
+                    task = dembedding_project(np.where(np.sum(self.Affectation_solution[i][j], axis=1) == 1)[0][0])
+                    start = pd.to_datetime('2009-01-01') + timedelta(j)
+                    finish = pd.to_datetime('2009-01-01') + timedelta(j + 1)
+                    resource = dembedding_competences(np.where(np.sum(self.Affectation_solution[i][j], axis=0) == 1)[0][0],
+                                                      self.data)
+                    list_dict.append(dict(
+                        Task=task, Start=start, Finish=finish, Resource=resource))
+            df = pd.DataFrame(list_dict)
+            fig = px.timeline(df, x_start="Start", x_end="Finish", y="Task", color="Resource")
+            fig.update_yaxes(autorange="reversed")  # otherwise tasks are listed from the bottom up
+            fig.update_xaxes(range=(pd.to_datetime('2009-01-01'),
+                                    pd.to_datetime('2009-01-01') + timedelta(len(self.Affectation_solution[0]))))
+            fig.update_layout(title="Affection for {}".format(dembedding_workers(
+                i, self.data
+            )))
+            fig.show()
 
 # ******************************************************************************************************************** #
 # Main
