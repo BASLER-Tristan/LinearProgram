@@ -45,6 +45,6 @@ python main.py
 ```
 <br>
 
-## Roadmap
+## Organisation
 
-À compléter.
+Le rapport au format .pdf se trouve dans compte-rendus/
